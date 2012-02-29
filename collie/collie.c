@@ -51,6 +51,7 @@ static const struct sd_option collie_options[] = {
 	/* debug options */
 	{'e', "begin", 0, "begin tracing"},
 	{'t', "stop", 0, "stop tracing"},
+	{'C', "cat", 0, "cat trace output"},
 
 	{ 0, NULL, 0, NULL },
 };

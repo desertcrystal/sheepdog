@@ -57,6 +57,8 @@ extern int register_trace_function(trace_func_t func);
 extern int trace_enable(void);
 extern int trace_disable(void);
 extern struct caller *trace_lookup_ip(unsigned long ip, int create);
+extern int trace_copy_buffer(void *buf);
+extern void trace_reset_buffer(void);
 
 #define register_tracer(new)			\
 static void __attribute__((constructor))	\
