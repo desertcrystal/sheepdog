@@ -79,11 +79,12 @@ static int simple_store_init(char *path)
 	return SD_RES_SUCCESS;
 }
 
-static int store_write_last_sector(uint64_t oid, struct siocb *iocb)
+static int write_last_sector(int fd)
 {
 	const int size = SECTOR_SIZE;
-	char *buf = NULL;
+	char *buf;
 	int ret;
+	off_t off = SD_DATA_OBJ_SIZE - size;
 
 	buf = valloc(size);
 	if (!buf) {
@@ -92,19 +93,56 @@ static int store_write_last_sector(uint64_t oid, struct siocb *iocb)
 	}
 	memset(buf, 0, size);
 
-	iocb->buf = buf;
-	iocb->length = size;
-	iocb->offset = SD_DATA_OBJ_SIZE - size;
-	ret = simple_store_write(oid, iocb);
+	ret = xpwrite(fd, buf, size, off);
+	if (ret != size)
+		ret = SD_RES_EIO;
+	else
+		ret = SD_RES_SUCCESS;
 	free(buf);
 
 	return ret;
 }
 
+static int err_to_sderr(uint64_t oid, int err)
+{
+	int ret;
+	if (err == ENOENT) {
+		struct stat s;
+
+		if (stat(obj_path, &s) < 0) {
+			eprintf("corrupted\n");
+			ret = SD_RES_EIO;
+		} else {
+			dprintf("object %016" PRIx64 " not found locally\n", oid);
+			ret = SD_RES_NO_OBJ;
+		}
+	} else {
+		eprintf("%m\n");
+		ret = SD_RES_UNKNOWN;
+	}
+	return ret;
+}
+
+/*
+ * Preallocate the whole object to get a better filesystem layout.
+ */
+static int prealloc(int fd)
+{
+	int ret = fallocate(fd, 0, 0, SD_DATA_OBJ_SIZE);
+	if (ret < 0) {
+		if (errno != ENOSYS && errno != EOPNOTSUPP)
+			ret = SD_RES_SYSTEM_ERROR;
+		else
+			ret = write_last_sector(fd);
+	} else
+		ret = SD_RES_SUCCESS;
+	return ret;
+}
+
 static int simple_store_open(uint64_t oid, struct siocb *iocb, int create)
 {
-	struct strbuf path = STRBUF_INIT;
-	int ret;
+	struct strbuf buf = STRBUF_INIT;
+	int ret = SD_RES_SUCCESS, fd;
 	int flags = def_store_flags;
 
 	if (sys->use_directio && is_data_obj(oid))
@@ -113,51 +151,22 @@ static int simple_store_open(uint64_t oid, struct siocb *iocb, int create)
 	if (create)
 		flags |= O_CREAT | O_TRUNC;
 
-	strbuf_addf(&path, "%s%08u/%016" PRIx64, obj_path, iocb->epoch, oid);
-
-	ret = open(path.buf, flags, def_fmode);
-	if (ret < 0) {
-		if (errno == ENOENT) {
-			struct stat s;
-
-			if (stat(obj_path, &s) < 0) {
-				eprintf("store directory corrupted: %m\n");
-				ret = SD_RES_EIO;
-			} else {
-				dprintf("object %08u/%016" PRIx64 " not found locally\n", iocb->epoch, oid);
-				ret = SD_RES_NO_OBJ;
-			}
-		} else {
-			eprintf("failed to open %s: %m\n", path.buf);
-			ret = SD_RES_UNKNOWN;
-		}
+	strbuf_addstr(&buf, obj_path);
+	strbuf_addf(&buf, "%08u/%016" PRIx64, iocb->epoch, oid);
+	fd = open(buf.buf, flags, def_fmode);
+	if (fd < 0) {
+		ret = err_to_sderr(oid, errno);
 		goto out;
 	}
-
-	iocb->fd = ret;
-	if (!(iocb->flags & SD_FLAG_CMD_COW) && create) {
-		/*
-		 * Preallocate the whole object to get a better filesystem layout.
-		 */
-		ret = fallocate(iocb->fd, 0, 0, SD_DATA_OBJ_SIZE);
-		if (ret < 0) {
-			if (errno != ENOSYS && errno != EOPNOTSUPP) {
-				ret = SD_RES_EIO;
-				close(iocb->fd);
-				goto out;
-			}
-
-			ret = store_write_last_sector(oid, iocb);
-			if (ret) {
-				close(iocb->fd);
-				goto out;
-			}
-		}
-	}
-
+	iocb->fd = fd;
 	ret = SD_RES_SUCCESS;
+	if (!(iocb->flags & SD_FLAG_CMD_COW) && create) {
+		ret = prealloc(fd);
+		if (ret != SD_RES_SUCCESS)
+			close(fd);
+	}
 out:
-	strbuf_release(&path);
+	strbuf_release(&buf);
 	return ret;
 }
 
