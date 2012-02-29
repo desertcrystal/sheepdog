@@ -48,6 +48,10 @@ static const struct sd_option collie_options[] = {
 	{'R', "restore", 1, "restore the cluster"},
 	{'l', "list", 0, "list the user epoch information"},
 
+	/* debug options */
+	{'e', "begin", 0, "begin tracing"},
+	{'t', "stop", 0, "stop tracing"},
+
 	{ 0, NULL, 0, NULL },
 };
 
@@ -287,6 +291,7 @@ int main(int argc, char **argv)
 		vdi_command,
 		node_command,
 		cluster_command,
+		debug_command,
 		{NULL,}
 	};
 
